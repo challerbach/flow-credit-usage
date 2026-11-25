@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flow Credit Usage</title>
+<style>
+  :root {
+    --page: #f9f9f9; --surface: #ffffff; --border: #e4e4e4; --grid: #eeeeee;
+    --text: #191919; --text-2: #666666; --accent: #257de0; --accent-soft: #cce3fd;
+    --bad: #dc3c3d; --good: #008a17; --radius: 10px;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --page: #0b0b0b; --surface: #191919; --border: #2e2e2e; --grid: #262626;
+      --text: #efefef; --text-2: #9c9c9c; --accent: #338ced; --accent-soft: #0f4a96; --bad: #eb6263; --good: #0aac23; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--page); color: var(--text); }
+  header { padding: 20px 28px 8px; display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .muted { color: var(--text-2); }
+  main { padding: 8px 28px 40px; display: grid; gap: 16px; max-width: 1280px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; min-width: 0; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+  label { display: grid; gap: 4px; font-size: 12px; color: var(--text-2); }
+  select, input, button { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; }
+  select#flow { min-width: 340px; }
+  select#hub { min-width: 240px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
+  .tile .v { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .l { font-size: 12px; color: var(--text-2); }
+  .tile .s { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+  .meter { height: 6px; border-radius: 3px; background: var(--grid); margin-top: 8px; overflow: hidden; }
+  .meter > div { height: 100%; background: var(--accent); border-radius: 3px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 16px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { font-size: 12px; font-weight: 600; color: var(--text-2); }
+  td.n, th.n { text-align: right; }
+  tr.sel td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  tbody tr.click { cursor: pointer; }
+  tbody tr.click:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .scroll { max-height: 420px; overflow: auto; }
+  .bar-cell { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+  .bar-cell span.b { display: inline-block; height: 6px; border-radius: 3px; background: var(--accent); }
+  .pill { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--border); color: var(--text-2); }
+  .pill.FAILED, .pill.ABORTED, .pill.EXPIRED { color: var(--bad); border-color: var(--bad); }
+  .pill.COMPLETE { color: var(--good); border-color: var(--good); }
+  .error { border-color: var(--bad); color: var(--bad); }
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart .axis { fill: var(--text-2); font-size: 11px; }
+  .chart .gridline { stroke: var(--grid); stroke-width: 1; }
+  .chart .bar { fill: var(--accent); }
+  .chart .hit { fill: transparent; }
+  .chart .bar { pointer-events: none; }
+  .chart .hit:hover + .bar, .chart .bar.on { fill: color-mix(in srgb, var(--accent) 75%, var(--text)); }
+  .tip { position: absolute; pointer-events: none; background: var(--text); color: var(--surface); font-size: 12px; padding: 6px 8px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, -100%); margin-top: -8px; display: none; z-index: 2; }
+  .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  details summary { cursor: pointer; color: var(--text-2); }
+  code { font-size: 12px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Flow Credit Usage</h1>
+  <span id="hubline" class="muted">Loading…</span>
+  <button id="changeToken" class="hidden" style="margin-left:auto;font-size:12px;padding:4px 10px">Change token</button>
+</header>
+<main>
+  <section id="tokenCard" class="card hidden">
+    <h2>Personal access token</h2>
+    <p class="muted">The token stays in the local server's memory and is only sent to the Amplience GraphQL API. To skip this step, start the app with <code>AMPLIENCE_PAT</code> set or put it in <code>.env.local</code>.</p>
+    <form id="tokenForm" class="controls">
+      <label>Token <input id="tokenInput" type="password" autocomplete="off" size="48" required></label>
+      <button class="primary" type="submit">Connect</button>
+    </form>
+  </section>
+
+  <section id="errorCard" class="card error hidden"></section>
+
+  <section id="app" class="hidden" style="display:grid;gap:16px">
+    <div class="card controls">
+      <label>Hub <select id="hub"></select></label>
+      <label>Flow <select id="flow"></select></label>
+      <label>Year <select id="year"></select></label>
+      <label>Month <select id="month"></select></label>
+      <button id="refresh" title="Download the credit report again">Reload report</button>
+      <span id="loaded" class="muted" style="font-size:12px"></span>
+    </div>
+
+    <div class="tiles">
+      <div class="card tile"><div class="l">Credits used by this flow</div><div class="v" id="tTotal">–</div><div class="s" id="tTotalS"></div></div>
+      <div class="card tile"><div class="l">Runs with credit entries</div><div class="v" id="tRuns">–</div><div class="s" id="tRunsS"></div></div>
+      <div class="card tile"><div class="l">Average per run</div><div class="v" id="tAvg">–</div><div class="s" id="tAvgS"></div></div>
+      <div class="card tile"><div class="l">Organisation credit balance</div><div class="v" id="tBal">–</div><div class="s" id="tBalS"></div><div class="meter"><div id="tBalM" style="width:0"></div></div></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card"><div class="head"><h2 id="timeTitle">Credits over time</h2></div><div id="timeChart" class="chart"></div></div>
+      <div class="card"><div class="head"><h2>Credits per run</h2><span class="muted" style="font-size:12px">oldest → newest</span></div><div id="runChart" class="chart"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="head"><h2>Runs</h2><button id="csv">Export CSV</button></div>
+      <div class="scroll"><table id="runsTable"></table></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card"><h2>Credits by action</h2><div class="scroll"><table id="actionsTable"></table></div></div>
+      <div class="card"><h2>Credits by billing unit</h2><div class="scroll"><table id="unitsTable"></table></div></div>
+    </div>
+
+    <div class="card">
+      <div class="head"><h2>All flows in this hub</h2><span class="muted" style="font-size:12px">Same period. Click a row to open the flow.</span></div>
+      <div class="scroll"><table id="hubTable"></table></div>
+    </div>
+
+    <details class="card" id="diag"><summary>Diagnostics</summary><pre id="diagText" style="white-space:pre-wrap;font-size:12px"></pre></details>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n, d = 2) => (Number(n) || 0).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: d });
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const dt = (s) => { if (!s) return ''; const d = new Date(s); return isNaN(d) ? s : d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); };
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+let hub; let last;
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) { const e = new Error(json.error || `HTTP ${res.status}`); e.status = res.status; throw e; }
+  return json;
+}
+function showError(msg) { const c = $('errorCard'); c.textContent = msg || ''; c.classList.toggle('hidden', !msg); }
+
+// ---------- start ----------
+let usageRequest = 0;
+
+async function start() {
+  const st = await api('/api/status');
+  $('hubline').textContent = '';
+  if (!st.hasToken) { $('tokenCard').classList.remove('hidden'); return; }
+  await loadHubs();
+}
+
+$('tokenForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  showError('');
+  try {
+    await api('/api/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: $('tokenInput').value }) });
+    $('tokenInput').value = '';
+    $('tokenCard').classList.add('hidden');
+    await loadHubs();
+  } catch (err) { showError(err.message); }
+});
+
+$('changeToken').addEventListener('click', () => { $('tokenCard').classList.remove('hidden'); $('tokenInput').focus(); });
+
+/** Hubs the token can see -> hub dropdown (grouped by organisation). */
+async function loadHubs() {
+  const params = new URLSearchParams(location.search);
+  let list;
+  try {
+    list = await api('/api/hubs');
+  } catch (err) {
+    if (err.status === 401) $('tokenCard').classList.remove('hidden');
+    return showError(err.message);
+  }
+  $('changeToken').classList.remove('hidden');
+  if (!list.hubs.length) return showError('This token has no access to any hub.');
+  const orgs = [...new Set(list.hubs.map((h) => h.org))];
+  $('hub').innerHTML = orgs.map((o) => `<optgroup label="${esc(o)}">` +
+    list.hubs.filter((h) => h.org === o).map((h) => `<option value="${esc(h.dcHubId)}">${esc(h.label)} (${esc(h.dcHubId)})</option>`).join('') + '</optgroup>').join('');
+  const wanted = params.get('hub');
+  $('hub').value = wanted && list.hubs.some((h) => h.dcHubId === wanted) ? wanted : list.defaultHubId;
+
+  const now = new Date();
+  const years = []; for (let y = now.getFullYear(); y >= now.getFullYear() - 3; y--) years.push(y);
+  $('year').innerHTML = years.map((y) => `<option>${y}</option>`).join('');
+  $('year').value = params.get('year') || now.getFullYear();
+  $('month').innerHTML = `<option value="0">Whole year</option>` + MONTHS.map((m, i) => `<option value="${i + 1}">${m}</option>`).join('');
+  $('month').value = params.get('month') ?? String(now.getMonth() + 1);
+  $('app').classList.remove('hidden');
+  await loadHub(params.get('flow'));
+}
+
+/** Flows and credit balance of the selected hub. */
+async function loadHub(wantedFlow) {
+  showError('');
+  $('flow').innerHTML = '<option>Loading…</option>';
+  $('flow').disabled = true;
+  try {
+    hub = await api(`/api/hub?${new URLSearchParams({ hub: $('hub').value })}`);
+  } catch (err) {
+    if (err.status === 401) $('tokenCard').classList.remove('hidden');
+    $('flow').innerHTML = '';
+    return showError(err.message);
+  } finally { $('flow').disabled = false; }
+  $('hubline').textContent = `${hub.org.label} / ${hub.hub.label}`;
+  const b = hub.balance;
+  if (b && !b.error) {
+    $('tBal').textContent = fmt(b.balance, 0);
+    $('tBalS').textContent = `of ${fmt(b.creditAllowance, 0)} allowance${b.quotaPeriod ? ` · ${b.quotaPeriod}` : ''}`;
+    const pct = b.creditAllowance ? Math.max(0, Math.min(100, (b.balance / b.creditAllowance) * 100)) : 0;
+    $('tBalM').style.width = `${pct}%`;
+  } else {
+    $('tBal').textContent = 'n/a';
+    $('tBalS').textContent = b?.error ? 'Not readable with this token' : '';
+    $('tBalM').style.width = '0';
+  }
+  const flowSel = $('flow');
+  flowSel.innerHTML = hub.flows.length
+    ? hub.flows.map((f) => `<option value="${esc(f.id)}">${esc(f.label)}${f.status !== 'ENABLED' ? ` (${esc(f.status.toLowerCase())})` : ''}</option>`).join('')
+    : '<option value="">No flows in this hub</option>';
+  const byRecent = [...hub.flows].sort((a, b) => String(b.lastRunDate ?? '').localeCompare(String(a.lastRunDate ?? '')));
+  flowSel.value = wantedFlow && hub.flows.some((f) => f.id === wantedFlow) ? wantedFlow : byRecent[0]?.id ?? '';
+  await loadUsage();
+}
+
+$('hub').addEventListener('change', () => loadHub());
+['flow', 'year', 'month'].forEach((id) => $(id).addEventListener('change', () => loadUsage()));
+$('refresh').addEventListener('click', () => loadUsage(true));
+
+async function loadUsage(refresh = false) {
+  if (!hub) return;
+  const flow = hub.flows.find((f) => f.id === $('flow').value);
+  const q = new URLSearchParams({ hub: hub.hub.dcHubId, flow: flow?.id ?? '', label: flow?.label ?? '', year: $('year').value, month: $('month').value });
+  history.replaceState(null, '', `?${new URLSearchParams({ hub: q.get('hub'), flow: q.get('flow'), year: q.get('year'), month: q.get('month') })}`);
+  const mine = ++usageRequest;
+  if (refresh) q.set('refresh', '1');
+  showError('');
+  $('loaded').textContent = 'Loading credit report…';
+  $('refresh').disabled = true;
+  try {
+    const data = await api(`/api/usage?${q}`);
+    if (mine !== usageRequest) return; // a newer selection is loading
+    last = data;
+    last.flowLabel = flow?.label;
+    render(last);
+    $('loaded').textContent = `Report downloaded ${dt(last.reportLoadedAt)}`;
+  } catch (err) {
+    showError(err.message);
+    $('loaded').textContent = '';
+  } finally { $('refresh').disabled = false; }
+}
+
+// ---------- render ----------
+function render(d) {
+  const f = d.flow ?? { matchedBy: 'id', total: 0, entries: 0, runs: [], actions: [], units: [], days: [], runsWithoutCredits: 0 };
+  const periodName = Number($('month').value) ? `${MONTHS[$('month').value - 1]} ${$('year').value}` : $('year').value;
+  $('tTotal').textContent = fmt(f.total);
+  const share = d.hubTotal ? (f.total / d.hubTotal) * 100 : 0;
+  $('tTotalS').textContent = `${periodName} · ${fmt(share, 1)}% of the hub's flow credits`;
+  $('tRuns').textContent = fmt(f.runs.length, 0);
+  $('tRunsS').textContent = f.runsWithoutCredits ? `${f.runsWithoutCredits} run(s) in this period without credit entries yet` : `${fmt(f.entries, 0)} credit entries`;
+  const avg = f.runs.length ? f.total / f.runs.length : 0;
+  $('tAvg').textContent = fmt(avg);
+  const max = f.runs.reduce((m, r) => Math.max(m, r.credits), 0);
+  $('tAvgS').textContent = f.runs.length ? `highest run: ${fmt(max)}` : '';
+
+  // over time: per day for a month, per month for a year
+  let series;
+  if (Number($('month').value)) {
+    const y = Number($('year').value), m = Number($('month').value);
+    const days = new Date(y, m, 0).getDate();
+    const map = new Map(f.days.map((x) => [x.day, x.credits]));
+    series = Array.from({ length: days }, (_, i) => {
+      const key = `${y}-${String(m).padStart(2, '0')}-${String(i + 1).padStart(2, '0')}`;
+      return { label: String(i + 1), value: map.get(key) ?? 0, tip: `${i + 1} ${MONTHS[m - 1].slice(0, 3)}: ${fmt(map.get(key) ?? 0)} credits` };
+    });
+    $('timeTitle').textContent = 'Credits per day';
+  } else {
+    const sums = Array(12).fill(0);
+    f.days.forEach((x) => { const m = Number(x.day.slice(5, 7)); if (m) sums[m - 1] += x.credits; });
+    series = sums.map((v, i) => ({ label: MONTHS[i].slice(0, 3), value: v, tip: `${MONTHS[i]}: ${fmt(v)} credits` }));
+    $('timeTitle').textContent = 'Credits per month';
+  }
+  barChart($('timeChart'), series, { labelEvery: series.length > 15 ? 5 : 1 });
+
+  const chron = [...f.runs].sort((a, b) => String(a.started).localeCompare(String(b.started)));
+  barChart($('runChart'), chron.map((r, i) => ({ label: String(i + 1), value: r.credits, tip: `${r.label || r.id || 'Run'} · ${dt(r.started)} · ${fmt(r.credits)} credits` })), { labelEvery: Math.max(1, Math.ceil(chron.length / 12)), empty: 'No runs with credit entries in this period.' });
+
+  // runs table
+  $('runsTable').innerHTML = `<thead><tr><th>Started</th><th>Run</th><th>Status</th><th class="n">Entries</th><th class="n">Credits</th></tr></thead><tbody>` +
+    (f.runs.map((r) => `<tr><td>${esc(dt(r.started))}</td><td>${esc(r.label || r.id || '–')}</td><td>${r.status ? `<span class="pill ${esc(r.status)}">${esc(r.status.toLowerCase())}</span>` : ''}</td><td class="n">${r.entries}</td><td class="n">${bar(r.credits, max)}</td></tr>`).join('') ||
+      `<tr><td colspan="5" class="muted">No credit entries for this flow in ${esc(periodName)}.</td></tr>`) + '</tbody>';
+
+  const amax = f.actions[0]?.credits || 0;
+  $('actionsTable').innerHTML = `<thead><tr><th>Action</th><th>Units</th><th class="n">Calls</th><th class="n">Credits</th><th class="n">Share</th></tr></thead><tbody>` +
+    (f.actions.map((a) => `<tr><td>${esc(a.action)}</td><td class="muted">${esc(a.units.join(', '))}</td><td class="n">${a.calls}</td><td class="n">${bar(a.credits, amax)}</td><td class="n">${fmt(f.total ? (a.credits / f.total) * 100 : 0, 1)}%</td></tr>`).join('') || `<tr><td colspan="5" class="muted">–</td></tr>`) + '</tbody>';
+
+  const umax = f.units[0]?.credits || 0;
+  $('unitsTable').innerHTML = `<thead><tr><th>Unit</th><th class="n">Quantity</th><th class="n">Credits</th></tr></thead><tbody>` +
+    (f.units.map((u) => `<tr><td>${esc(u.unit)}</td><td class="n">${fmt(u.quantity, 3)}</td><td class="n">${bar(u.credits, umax)}</td></tr>`).join('') || `<tr><td colspan="3" class="muted">–</td></tr>`) + '</tbody>';
+
+  // hub flows
+  const byKey = new Map(hub.flows.map((x) => [normId(x.id), x]));
+  const hmax = d.hubFlows[0]?.credits || 0;
+  const sel = normId($('flow').value);
+  $('hubTable').innerHTML = `<thead><tr><th>Flow</th><th class="n">Runs</th><th class="n">Credits</th><th class="n">Share</th></tr></thead><tbody>` +
+    (d.hubFlows.map((h) => {
+      const fl = byKey.get(h.key);
+      return `<tr class="${fl ? 'click' : ''} ${h.key === sel ? 'sel' : ''}" data-id="${esc(fl?.id ?? '')}"><td>${esc(fl?.label ?? h.label ?? h.key)}${fl ? '' : ' <span class="pill">deleted or other hub</span>'}</td><td class="n">${h.runs}</td><td class="n">${bar(h.credits, hmax)}</td><td class="n">${fmt(d.hubTotal ? (h.credits / d.hubTotal) * 100 : 0, 1)}%</td></tr>`;
+    }).join('') || `<tr><td colspan="4" class="muted">No flow credits in this hub for ${esc(periodName)}.</td></tr>`) +
+    (d.hubFlows.length ? `<tr><td><b>Total</b></td><td></td><td class="n"><b>${fmt(d.hubTotal)}</b></td><td></td></tr>` : '') + '</tbody>';
+  $('hubTable').querySelectorAll('tr.click').forEach((tr) => tr.addEventListener('click', () => { $('flow').value = tr.dataset.id; loadUsage(); }));
+
+  const dg = d.diagnostics;
+  $('diagText').textContent = [
+    `Report entries (year): ${dg.reportEntries}`, `Entries from flows: ${dg.workflowEntries}`, `… in period ${d.period}: ${dg.periodEntries}`, `… in this hub: ${dg.hubEntries}`,
+    `… for this flow: ${f.entries} (matched by ${f.matchedBy === 'label' ? 'flow label, the entries have no workflowId' : 'workflowId'})`,
+    '', 'Fields of the first report entry:', ...(dg.sampleKeys || []).map((k) => `  ${k}`),
+  ].join('\n');
+}
+
+function normId(v) {
+  const s = String(v ?? '').trim();
+  if (/^[A-Za-z0-9+/]+=*$/.test(s) && s.length >= 8) { try { const d = atob(s); const m = d.match(/^[A-Za-z]+:(.+)$/); if (m && /^[\x20-\x7e]+$/.test(d)) return m[1].toLowerCase(); } catch {} }
+  return s.toLowerCase();
+}
+function bar(v, max) { const w = max ? Math.max(2, Math.round((v / max) * 60)) : 0; return `<span class="bar-cell">${fmt(v)}<span class="b" style="width:${w}px"></span></span>`; }
+
+// ---------- bar chart (single series, hover tooltip) ----------
+function barChart(el, data, { labelEvery = 1, empty = 'No credits in this period.' } = {}) {
+  const W = 560, H = 220, m = { t: 10, r: 8, b: 24, l: 44 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const total = data.reduce((s, d) => s + d.value, 0);
+  if (!data.length || !total) { el.innerHTML = `<p class="muted">${esc(empty)}</p>`; return; }
+  const maxV = niceMax(Math.max(...data.map((d) => d.value)));
+  const ticks = [0, maxV / 4, maxV / 2, (maxV * 3) / 4, maxV];
+  const step = iw / data.length, gap = Math.min(2, step * 0.2), bw = Math.max(1, Math.min(step - gap, 28));
+  const y = (v) => m.t + ih - (v / maxV) * ih;
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Bar chart">`;
+  for (const t of ticks) s += `<line class="gridline" x1="${m.l}" x2="${W - m.r}" y1="${y(t)}" y2="${y(t)}"/><text class="axis" x="${m.l - 6}" y="${y(t) + 4}" text-anchor="end">${fmt(t, maxV < 4 ? 2 : 0)}</text>`;
+  data.forEach((d, i) => {
+    const x = m.l + i * step + (step - bw) / 2, h = Math.max(0, (d.value / maxV) * ih), r = Math.min(4, bw / 2, h);
+    const top = m.t + ih - h, bot = m.t + ih;
+    s += `<rect class="hit" data-i="${i}" x="${m.l + i * step}" y="${m.t}" width="${step}" height="${ih}"/>`;
+    s += h > 0 ? `<path class="bar" data-b="${i}" d="M${x},${bot} V${top + r} Q${x},${top} ${x + r},${top} H${x + bw - r} Q${x + bw},${top} ${x + bw},${top + r} V${bot} Z"/>` : '';
+    if (i % labelEvery === 0) s += `<text class="axis" x="${x + bw / 2}" y="${H - 6}" text-anchor="middle">${esc(d.label)}</text>`;
+  });
+  s += `</svg><div class="tip"></div>`;
+  el.innerHTML = s;
+  const tip = el.querySelector('.tip'), svg = el.querySelector('svg');
+  el.querySelectorAll('.hit').forEach((hit) => {
+    hit.addEventListener('mouseenter', () => {
+      const i = Number(hit.dataset.i), d = data[i];
+      el.querySelectorAll('.bar.on').forEach((b) => b.classList.remove('on'));
+      el.querySelector(`[data-b="${i}"]`)?.classList.add('on');
+      const sc = svg.getBoundingClientRect().width / W;
+      tip.textContent = d.tip; tip.style.display = 'block';
+      tip.style.left = `${(m.l + i * step + step / 2) * sc}px`; tip.style.top = `${y(d.value) * sc}px`;
+    });
+    hit.addEventListener('mouseleave', () => { tip.style.display = 'none'; el.querySelectorAll('.bar.on').forEach((b) => b.classList.remove('on')); });
+  });
+}
+function niceMax(v) { if (v <= 0) return 1; const p = 10 ** Math.floor(Math.log10(v)); const n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 4 : n <= 5 ? 5 : 10) * p; }
+
+// ---------- CSV ----------
+$('csv').addEventListener('click', () => {
+  if (!last?.flow) return;
+  const rows = [['started', 'run', 'run_id', 'status', 'entries', 'credits'], ...last.flow.runs.map((r) => [r.started, r.label, r.id, r.status, r.entries, r.credits])];
+  const csv = rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = `credits-${(last.flowLabel || 'flow').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${last.period}.csv`;
+  a.click();
+});
+
+start().catch((e) => showError(e.message));
+</script>
+</body>
+</html>

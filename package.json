@@ -1,0 +1,12 @@
+{
+  "name": "flow-credit-usage",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local app showing the Amplience credits a Workforce flow used, from the organisation's JSON credit report",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/*.test.mjs"
+  }
+}
