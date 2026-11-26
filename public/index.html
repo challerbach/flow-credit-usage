@@ -45,6 +45,10 @@
   tr.sel td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
   tbody tr.click { cursor: pointer; }
   tbody tr.click:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  td.caret { width: 18px; color: var(--text-2); }
+  tr.detail > td { background: var(--page); padding: 4px 8px 12px 34px; }
+  tr.detail table th, tr.detail table td { padding: 4px 8px; }
+  .driver { font-size: 12px; color: var(--text-2); }
   .scroll { max-height: 420px; overflow: auto; }
   .bar-cell { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
   .bar-cell span.b { display: inline-block; height: 6px; border-radius: 3px; background: var(--accent); }
@@ -108,8 +112,8 @@
     </div>
 
     <div class="card">
-      <div class="head"><h2>Runs</h2><button id="csv">Export CSV</button></div>
-      <div class="scroll"><table id="runsTable"></table></div>
+      <div class="head"><h2>Runs</h2><span style="display:flex;gap:8px"><button id="expandAll">Expand all</button><button id="csv">Export runs CSV</button><button id="csvActions">Export actions per run CSV</button></span></div>
+      <p id="runsNote" class="muted" style="margin:0 0 8px;font-size:12px"></p><div class="scroll"><table id="runsTable"></table></div>
     </div>
 
     <div class="grid2">
@@ -291,12 +295,20 @@ function render(d) {
   barChart($('runChart'), chron.map((r, i) => ({ label: String(i + 1), value: r.credits, tip: `${r.label || r.id || 'Run'} · ${dt(r.started)} · ${fmt(r.credits)} credits` })), { labelEvery: Math.max(1, Math.ceil(chron.length / 12)), empty: 'No runs with credit entries in this period.' });
 
   // runs table
-  $('runsTable').innerHTML = `<thead><tr><th>Started</th><th>Run</th><th>Status</th><th class="n">Entries</th><th class="n">Credits</th></tr></thead><tbody>` +
-    (f.runs.map((r) => `<tr><td>${esc(dt(r.started))}</td><td>${esc(r.label || r.id || '–')}</td><td>${r.status ? `<span class="pill ${esc(r.status)}">${esc(r.status.toLowerCase())}</span>` : ''}</td><td class="n">${r.entries}</td><td class="n">${bar(r.credits, max)}</td></tr>`).join('') ||
-      `<tr><td colspan="5" class="muted">No credit entries for this flow in ${esc(periodName)}.</td></tr>`) + '</tbody>';
+  $('runsNote').textContent = f.runsError ? `Run status not available: ${f.runsError}` : '';
+  $('runsTable').innerHTML = `<thead><tr><th></th><th>Started</th><th>Run</th><th>Status</th><th>Main cost driver</th><th class="n">Entries</th><th class="n">Credits</th></tr></thead><tbody>` +
+    (f.runs.map((r, i) => {
+      const top = r.actions?.[0];
+      const driver = top && r.credits ? `${esc(top.action)} · ${fmt((top.credits / r.credits) * 100, 0)}%` : '';
+      return `<tr class="click run" data-i="${i}"><td class="caret">▸</td><td>${esc(dt(r.started))}</td><td>${esc(r.label || r.id || '–')}</td><td>${r.status ? `<span class="pill ${esc(r.status)}">${esc(r.status.toLowerCase())}</span>` : ''}</td><td class="driver">${driver}</td><td class="n">${r.entries}</td><td class="n">${bar(r.credits, max)}</td></tr>` +
+        `<tr class="detail hidden" data-for="${i}"><td colspan="7">${runActionsTable(r)}</td></tr>`;
+    }).join('') ||
+      `<tr><td colspan="7" class="muted">No credit entries for this flow in ${esc(periodName)}.</td></tr>`) + '</tbody>';
+  $('runsTable').querySelectorAll('tr.run').forEach((tr) => tr.addEventListener('click', () => toggleRun(tr)));
+  $('expandAll').textContent = 'Expand all';
 
   const amax = f.actions[0]?.credits || 0;
-  $('actionsTable').innerHTML = `<thead><tr><th>Action</th><th>Units</th><th class="n">Calls</th><th class="n">Credits</th><th class="n">Share</th></tr></thead><tbody>` +
+  $('actionsTable').innerHTML = `<thead><tr><th>Action</th><th>Units</th><th class="n" title="Billing line items: an LLM call has one for input and one for output tokens">Line items</th><th class="n">Credits</th><th class="n">Share</th></tr></thead><tbody>` +
     (f.actions.map((a) => `<tr><td>${esc(a.action)}</td><td class="muted">${esc(a.units.join(', '))}</td><td class="n">${a.calls}</td><td class="n">${bar(a.credits, amax)}</td><td class="n">${fmt(f.total ? (a.credits / f.total) * 100 : 0, 1)}%</td></tr>`).join('') || `<tr><td colspan="5" class="muted">–</td></tr>`) + '</tbody>';
 
   const umax = f.units[0]?.credits || 0;
@@ -319,9 +331,31 @@ function render(d) {
   $('diagText').textContent = [
     `Report entries (year): ${dg.reportEntries}`, `Entries from flows: ${dg.workflowEntries}`, `… in period ${d.period}: ${dg.periodEntries}`, `… in this hub: ${dg.hubEntries}`,
     `… for this flow: ${f.entries} (matched by ${f.matchedBy === 'label' ? 'flow label, the entries have no workflowId' : 'workflowId'})`,
+    '', `Runs loaded from Workforce: ${f.runsLoaded ?? 0}${f.runsError ? ` (error: ${f.runsError})` : ''}`,
+    `Runs in the table with a status: ${f.runsMatched ?? 0} of ${f.runs.length}`,
+    `Run ID from Workforce (example): ${f.sampleRunId || '-'}`, `Run ID from the credit report (example): ${f.sampleReportRunId || '-'}`,
     '', 'Fields of the first report entry:', ...(dg.sampleKeys || []).map((k) => `  ${k}`),
   ].join('\n');
 }
+
+/** Actions of one run: action, units, calls, credits, share of the run. */
+function runActionsTable(r) {
+  const amax = r.actions?.[0]?.credits || 0;
+  return `<table><thead><tr><th>Action</th><th>Units</th><th class="n" title="Billing line items: an LLM call has one for input and one for output tokens">Line items</th><th class="n">Credits</th><th class="n">Share of run</th></tr></thead><tbody>` +
+    ((r.actions ?? []).map((a) => `<tr><td>${esc(a.action)}</td><td class="muted">${esc(a.units.join(', '))}</td><td class="n">${a.calls}</td><td class="n">${bar(a.credits, amax)}</td><td class="n">${fmt(r.credits ? (a.credits / r.credits) * 100 : 0, 1)}%</td></tr>`).join('') ||
+      '<tr><td colspan="5" class="muted">No line items</td></tr>') + '</tbody></table>';
+}
+function toggleRun(tr, open) {
+  const detail = tr.nextElementSibling;
+  const show = open ?? detail.classList.contains('hidden');
+  detail.classList.toggle('hidden', !show);
+  tr.querySelector('.caret').textContent = show ? '▾' : '▸';
+}
+$('expandAll').addEventListener('click', () => {
+  const open = $('expandAll').textContent === 'Expand all';
+  $('runsTable').querySelectorAll('tr.run').forEach((tr) => toggleRun(tr, open));
+  $('expandAll').textContent = open ? 'Collapse all' : 'Expand all';
+});
 
 function normId(v) {
   const s = String(v ?? '').trim();
@@ -374,6 +408,16 @@ $('csv').addEventListener('click', () => {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
   a.download = `credits-${(last.flowLabel || 'flow').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${last.period}.csv`;
+  a.click();
+});
+$('csvActions').addEventListener('click', () => {
+  if (!last?.flow) return;
+  const rows = [['started', 'run', 'run_id', 'status', 'action', 'units', 'calls', 'credits', 'share_of_run']];
+  for (const r of last.flow.runs) for (const x of r.actions ?? []) rows.push([r.started, r.label, r.id, r.status, x.action, x.units.join(' '), x.calls, x.credits, r.credits ? x.credits / r.credits : 0]);
+  const csv = rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = `credits-per-action-${(last.flowLabel || 'flow').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${last.period}.csv`;
   a.click();
 });
 

@@ -32,6 +32,7 @@ The credit report is downloaded once per year and cached for 10 minutes (**Reloa
 Things to know:
 
 - Workforce records credits each time a run pauses or stops, so one run can have several entries. The app groups them per run.
+- Click a run (or **Expand all**) to see its credits per action. **Export actions per run CSV** exports the same breakdown. "Line items" counts billing lines, not action calls: an LLM action has one line for input and one for output tokens.
 - Running runs have no credit entries yet ("runs without credit entries" on the Runs tile).
 - Reading the credit report needs organisation admin rights. Without them the app shows the API's error.
 - Billing units: `action.trigger` (flat fee per trigger), `{model}.input-tokens` / `{model}.output-tokens` (LLM and agent actions), `extension.cpu.seconds` (extensions), `action.cpu.seconds` (other actions), `{supplier}.credits` (third-party actions). Flow control, helper and Human Review actions are free.

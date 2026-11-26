@@ -70,6 +70,15 @@ export function normId(v) {
   return s.toLowerCase();
 }
 
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+
+/** Run IDs: the report and the GraphQL API may wrap the run UUID differently; compare on the UUID. */
+export function runKey(v) {
+  const n = normId(v);
+  const m = n.match(UUID);
+  return m ? m[m.length - 1] : n;
+}
+
 const num = (v) => {
   const n = typeof v === 'number' ? v : parseFloat(v);
   return Number.isFinite(n) ? n : 0;
@@ -105,7 +114,7 @@ async function gql(query, variables) {
 const Q_VIEWER = `query viewerHubs { viewer { email organizations(first: 50) { edges { node { id name label cmsHubs { id name label cmsHubId } } } } } }`;
 const Q_BALANCE = `query balance($id: ID!) { organization(id: $id) { creditBalance { balance creditAllowance quotaPeriod } } }`;
 const Q_FLOWS = `query flows($id: ID!, $after: String) { cmsHub(id: $id) { contentFlows(first: 50, after: $after) { edges { node { id label status lastRunDate } } pageInfo { hasNextPage endCursor } } } }`;
-const Q_RUNS = `query runs($id: ID!, $after: String) { contentFlow(id: $id) { runs(first: 100, after: $after) { edges { node { id label status createdDate updatedDate } } pageInfo { hasNextPage endCursor } } } }`;
+const Q_RUNS = `query runs($id: ID!, $after: String) { contentFlow(id: $id) { runs(first: 50, after: $after) { edges { node { id label status createdDate updatedDate } } pageInfo { hasNextPage endCursor } } } }`;
 const Q_REPORT = `query report($id: ID!, $input: CreditTransactionReportFilterInput) { organization(id: $id) { creditTransactionReport(input: $input) { reportURL } } }`;
 
 /** All CMS hubs the token can see: [{ org: { id, label }, hub: { id, label, key, dcHubId } }]. */
@@ -185,7 +194,7 @@ export function normaliseEntry(r) {
   const attrs = kv(payload.attributes ?? r?.attributes);
   const items = (payload.lineItems ?? r?.lineItems ?? []).map((li) => {
     const a = kv(li.attributes);
-    return { unit: li.unit ?? '?', quantity: num(li.quantity), credits: num(li.credits), action: a.actionLabel ?? a.actionId ?? a.action ?? '' };
+    return { unit: li.unit ?? '?', quantity: num(li.quantity ?? li.amount ?? li.value), credits: num(li.credits), action: a.actionLabel ?? a.actionId ?? a.action ?? '' };
   });
   const itemCredits = items.reduce((s, i) => s + i.credits, 0);
   const change = num(r?.change ?? r?.event?.change ?? r?.event?.payload?.change);
@@ -220,7 +229,7 @@ async function loadReport(orgId, year, refresh) {
   }
   if (!res.ok) throw new ApiError(`The credit report download answered HTTP ${res.status}.`);
   const raw = parseReport(await res.text());
-  const entry = { at: Date.now(), records: raw.map(normaliseEntry), sampleKeys: sampleKeys(raw[0]) };
+  const entry = { at: Date.now(), records: raw.map(normaliseEntry), sampleKeys: sampleKeys(raw.find((r) => (r?.event?.payload?.lineItems ?? r?.payload?.lineItems ?? r?.lineItems)?.length) ?? raw[0]) };
   reportCache.set(key, entry);
   return entry;
 }
@@ -264,7 +273,7 @@ export function aggregate(records, { hub, flow, flowLabel, year, month, runs = [
     const f = byFlow.get(k) ?? { key: k, label: r.flowLabel, credits: 0, runs: new Set(), entries: 0 };
     f.credits += r.credits;
     f.entries += 1;
-    if (r.runId) f.runs.add(normId(r.runId));
+    if (r.runId) f.runs.add(runKey(r.runId));
     if (r.flowLabel) f.label = r.flowLabel;
     byFlow.set(k, f);
   }
@@ -282,7 +291,7 @@ export function aggregate(records, { hub, flow, flowLabel, year, month, runs = [
     matchedBy = mine.length ? 'label' : 'id';
   }
 
-  const runIndex = new Map(runs.map((r) => [normId(r.id), r]));
+  const runIndex = new Map(runs.map((r) => [runKey(r.id), r]));
   const byRun = new Map();
   const byAction = new Map();
   const byUnit = new Map();
@@ -290,8 +299,8 @@ export function aggregate(records, { hub, flow, flowLabel, year, month, runs = [
   let total = 0;
   for (const r of mine) {
     total += r.credits;
-    const rk = normId(r.runId) || `req:${r.requestId || r.date}`;
-    const run = byRun.get(rk) ?? { id: r.runId, label: r.runLabel, first: r.date, last: r.date, credits: 0, entries: 0 };
+    const rk = runKey(r.runId) || `req:${r.requestId || r.date}`;
+    const run = byRun.get(rk) ?? { id: r.runId, label: r.runLabel, first: r.date, last: r.date, credits: 0, entries: 0, actions: new Map() };
     run.credits += r.credits;
     run.entries += 1;
     if (r.date && (!run.first || r.date < run.first)) run.first = r.date;
@@ -308,6 +317,11 @@ export function aggregate(records, { hub, flow, flowLabel, year, month, runs = [
       a.calls += 1;
       a.units.add(i.unit);
       byAction.set(ak, a);
+      const ra = run.actions.get(ak) ?? { action: ak, credits: 0, units: new Set(), calls: 0 };
+      ra.credits += i.credits;
+      ra.calls += 1;
+      ra.units.add(i.unit);
+      run.actions.set(ak, ra);
       const u = byUnit.get(i.unit) ?? { unit: i.unit, quantity: 0, credits: 0 };
       u.quantity += i.quantity;
       u.credits += i.credits;
@@ -316,8 +330,9 @@ export function aggregate(records, { hub, flow, flowLabel, year, month, runs = [
   }
   const runList = [...byRun.values()]
     .map((r) => {
-      const g = runIndex.get(normId(r.id));
-      return { ...r, status: g?.status ?? '', started: g?.createdDate ?? r.first };
+      const g = runIndex.get(runKey(r.id));
+      const actions = [...r.actions.values()].map((a) => ({ ...a, units: [...a.units] })).sort((a, b) => b.credits - a.credits);
+      return { ...r, actions, status: g?.status ?? '', started: g?.createdDate ?? r.first };
     })
     .sort((a, b) => String(b.started).localeCompare(String(a.started)));
 
@@ -329,7 +344,11 @@ export function aggregate(records, { hub, flow, flowLabel, year, month, runs = [
     actions: [...byAction.values()].map((a) => ({ ...a, units: [...a.units] })).sort((a, b) => b.credits - a.credits),
     units: [...byUnit.values()].sort((a, b) => b.credits - a.credits),
     days: [...byDay.entries()].map(([day, credits]) => ({ day, credits })).sort((a, b) => a.day.localeCompare(b.day)),
-    runsWithoutCredits: runs.filter((g) => !byRun.has(normId(g.id)) && String(g.createdDate ?? '').startsWith(prefix)).length,
+    runsWithoutCredits: runs.filter((g) => !byRun.has(runKey(g.id)) && String(g.createdDate ?? '').startsWith(prefix)).length,
+    runsLoaded: runs.length,
+    runsMatched: runList.filter((r) => r.status).length,
+    sampleRunId: runs[0] ? normId(runs[0].id) : '',
+    sampleReportRunId: mine.find((r) => r.runId)?.runId ?? '',
   };
   return result;
 }
@@ -398,13 +417,20 @@ const routes = {
     const flow = url.searchParams.get('flow') || '';
     const flowLabel = url.searchParams.get('label') || '';
     const refresh = url.searchParams.get('refresh') === '1';
+    let runsError = '';
     const [report, runs] = await Promise.all([
       loadReport(ctx.org.id, year, refresh),
-      flow ? paged(Q_RUNS, flow, (d) => d.contentFlow?.runs, 2000).catch(() => []) : [],
+      flow
+        ? paged(Q_RUNS, flow, (d) => d.contentFlow?.runs, 2000).catch((e) => {
+            runsError = e.message;
+            return [];
+          })
+        : [],
     ]);
     const out = aggregate(report.records, { hub: ctx.hub, flow, flowLabel, year, month, runs });
     out.reportLoadedAt = new Date(report.at).toISOString();
     out.diagnostics.sampleKeys = report.sampleKeys;
+    if (out.flow) out.flow.runsError = runsError;
     return out;
   },
 };

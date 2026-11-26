@@ -61,3 +61,12 @@ test('aggregate: whole year includes October', () => {
   assert.equal(out.flow.total, 6.25);
   assert.equal(out.flow.days.length, 3);
 });
+
+test('runKey matches run IDs in different wrappings', async () => {
+  const { runKey } = await import('../server.mjs');
+  const id = 'f35c4cdf-d2b0-4360-bb11-37e7e7fb4c5c';
+  assert.equal(runKey(id), id);
+  assert.equal(runKey(b64(`ContentFlowRun:${id}`)), id);
+  assert.equal(runKey(b64(`ContentFlowRun:org_x/641a123294efd40001d0f0d1/${id}`)), id);
+  assert.equal(runKey('r1'), 'r1');
+});
